@@ -9,6 +9,7 @@ data <- data[ , !(names(data) %in% "Date")]
 
 
 #stratified sampling to get same number of observations for each month
+set.seed(123)
 library(dplyr)
 df <- data.frame(data %>% group_by(Month) %>% sample_n(size=100))
 #randomly sample 1000 data points for the purpose of this report
@@ -102,9 +103,9 @@ ggplot(sample, aes(x=Snow, y=Rented.Bike.Count)) +  geom_boxplot()
 #Humidity/Wind speed/Rush period
 
 #Add interactions:
-lm2 <- lm(Rented.Bike.Count ~ . + (Temperature * Seasons) + (Humidity * Rain) + 
+lm2 <- lm(Rented.Bike.Count ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
 (Solar.Radiation*Rush.Period) + 
-(Hour * Temperature * Solar.Radiation) + (Humidity * Wind.speed..m.s. * Rush.Period), 
+(Hour * Rush.Period * Seasons) + (Humidity * Wind.speed..m.s. * Visibility..10m.), 
 data = sample)
 summary(lm2)
 
@@ -120,9 +121,9 @@ sample <- as.data.frame(sample)
 ggplot(sample, aes(x=Temperature, y=Rented.Bike.Count)) + geom_point()
 #Definitely not linear (I'll try second + third term)
 
-lm3 <- lm(Rented.Bike.Count ~ . + (Temperature * Seasons) + (Humidity * Rain) + 
-(Solar.Radiation*Rush.Period) + (Hour * Temperature * Solar.Radiation) 
-+ (Humidity * Wind.speed..m.s. * Rush.Period) + I(Temperature^3), 
+lm3 <- lm(Rented.Bike.Count ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
+            (Solar.Radiation*Rush.Period) + (Hour * Rush.Period * Seasons) + 
+            (Humidity * Wind.speed..m.s. * Visibility..10m.) + I(Temperature^3), 
            data = sample)
 summary(lm3)
 check_model_assumption_graphs(lm3)
@@ -133,11 +134,10 @@ check_model_assumption_graphs(lm3)
 #to a lower boundary. This makes sense as my data has a strong right skew.
 #The simplest transformation is taking ln() of Y:
 
-lm4 <- lm(log(Rented.Bike.Count) ~ . + (Temperature * Seasons) 
-          + (Humidity * Rain) + (Solar.Radiation*Rush.Period) + 
-            (Hour * Temperature * Solar.Radiation) 
-          + (Humidity * Wind.speed..m.s. * Rush.Period) + I(Temperature^3), 
-          data = sample) #plus 0.1 to adjust 0 values
+lm4 <- lm(log(Rented.Bike.Count+1) ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
+            (Solar.Radiation*Rush.Period) + (Hour * Rush.Period * Seasons) + 
+            (Humidity * Wind.speed..m.s. * Visibility..10m.) + I(Temperature^3), 
+          data = sample) #correct for 0s in response variable
 summary(lm4)
 check_model_assumption_graphs(lm4)
 #There's like this linear cluster of residuals??????
@@ -149,11 +149,9 @@ sample <- data.frame(sample %>%  filter(Rented.Bike.Count != 0))
 #BIKES ARE ONLY RENTED ON WEEKDAYS PERIOD???
 sample <- sample[ , !(names(sample) %in% c("Functioning.Day"))]
 
-lm5 <- lm(logb(Rented.Bike.Count, base = 5) ~ . + (Temperature * Seasons) 
-          + (Humidity * Rain) + (Solar.Radiation*Rush.Period) + 
-            (Hour * Temperature * Solar.Radiation) 
-          + (Humidity * Wind.speed..m.s. * Rush.Period) + 
-            I(Temperature^3), 
+lm5 <- lm(logb(Rented.Bike.Count, base = 5) ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
+            (Solar.Radiation*Rush.Period) + (Hour * Rush.Period * Seasons) + 
+            (Humidity * Wind.speed..m.s. * Visibility..10m.) + I(Temperature^3), 
           data = sample) 
 summary(lm5)
 check_model_assumption_graphs(lm5)
@@ -164,43 +162,47 @@ check_model_assumption_graphs(lm5)
 library(MASS)
 par(mfrow=c(1,1))
 
-boxcox_result <- boxcox(logb(Rented.Bike.Count, base = 5) ~ . + (Temperature * Seasons) 
-       + (Humidity * Rain) + (Solar.Radiation*Rush.Period) + 
-         (Hour * Temperature * Solar.Radiation) 
-       + (Humidity * Wind.speed..m.s. * Rush.Period) + 
-         I(Temperature^3), 
+boxcox_result <- boxcox(logb(Rented.Bike.Count, base = 5) ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
+(Solar.Radiation*Rush.Period) + (Hour * Rush.Period * Seasons) + 
+  (Humidity * Wind.speed..m.s. * Visibility..10m.) + I(Temperature^3), 
        data = sample, lambda = seq(0, 5, by = 0.05))
 #As lambda is wayyyyy larger than 0, get optimal lambda to transform Y.
 lambda = boxcox_result$x[which.max(boxcox_result$y)]
 lm_trans <- lm(((logb(Rented.Bike.Count, base = 5)^(lambda)-1)/(lambda))~ . + 
-                 (Temperature * Seasons) + (Humidity * Rain) + 
-                 (Solar.Radiation*Rush.Period) + 
-                 (Hour * Temperature * Solar.Radiation) 
-               + (Humidity * Wind.speed..m.s. * Rush.Period) + 
-                 I(Temperature^3),data=sample)
+(Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + (Solar.Radiation*Rush.Period) 
++ (Hour * Rush.Period * Seasons) + (Humidity * Wind.speed..m.s. * Visibility..10m.) 
++ I(Temperature^3),data=sample)
 summary(lm_trans) #slight imporvement on goodness of fit
 check_model_assumption_graphs(lm_trans) #EV and Normality definitely improved
+#BP test just to see how bad the EV violation is
+library(lmtest)
+bptest(lm_trans) #p < 2.2e^-16, yikes
 
 #What if I did boxcox first then log transform?
 lm_trans2 <- lm((logb(Rented.Bike.Count^(lambda-1)/(lambda), base = 5))~ . + 
-                  (Temperature * Seasons) + (Humidity * Rain) + 
-                  (Solar.Radiation*Rush.Period) + 
-                  (Hour * Temperature * Solar.Radiation) 
-                + (Humidity * Wind.speed..m.s. * Rush.Period) + 
-                  I(Temperature^3) -Month,data=sample)
+(Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + (Solar.Radiation*Rush.Period) 
++ (Hour * Rush.Period * Seasons) + (Humidity * Wind.speed..m.s. * Visibility..10m.) 
++ I(Temperature^3),data=sample)
 summary(lm_trans2) #goodness of fit worse
 check_model_assumption_graphs(lm_trans2) #Normality violation is worse
 
 #VST on top of log transformation?
 
-lm6 <- lm(sqrt(logb(Rented.Bike.Count, base = 5)) ~ . + (Temperature * Seasons) 
-          + (Humidity * Rain) + (Solar.Radiation*Rush.Period) + 
-            (Hour * Temperature * Solar.Radiation) 
-          + (Humidity * Wind.speed..m.s. * Rush.Period) + 
-            I(Temperature^3), 
-          data = sample) #plus 0.1 to adjust 0 values
+lm6 <- lm(sqrt(logb(Rented.Bike.Count, base = 5)) ~ .  + (Temperature * Humidity) 
++ (Wind.speed..m.s. * Seasons) + (Solar.Radiation*Rush.Period) 
++ (Hour * Rush.Period * Seasons) + (Humidity * Wind.speed..m.s. * Visibility..10m.) 
++ I(Temperature^3), data = sample) 
 summary(lm6) #goodness of fit worse
-check_model_assumption_graphs(lm6) #EV got WORSE! YOU HAD ONE JOB!
+check_model_assumption_graphs(lm6) 
+bptest(lm6) #YOU HAD ONE JOB!
+
+lm7 <- lm(log(logb(Rented.Bike.Count, base = 5)) ~ .  + (Temperature * Humidity) 
++ (Wind.speed..m.s. * Seasons) + (Solar.Radiation*Rush.Period) 
++ (Hour * Rush.Period * Seasons) + (Humidity * Wind.speed..m.s. * Visibility..10m.) 
++ I(Temperature^3), data = sample) 
+summary(lm7) #goodness of fit even worse
+check_model_assumption_graphs(lm7) 
+bptest(lm7) #YOU HAD ONE JOB! ONE!!!!!
 
 #------------------------------------------------------------------------------
 
@@ -209,44 +211,52 @@ check_model_assumption_graphs(lm6) #EV got WORSE! YOU HAD ONE JOB!
 library(olsrr) #VIF from faraway package can't handle complicated models, so VIF from olsrr was used instead.
 #Both calculate the same thing so no biggie.
 vif_values <- ols_vif_tol(lm_trans)
-vif_values$VIF #We see Month has near Infinite VIF; remove first and see results
+vif_values[,c("Variables","VIF")] #We see Month has near Infinite VIF; remove first and see results
 
-lm_trans2 <- lm(((logb(Rented.Bike.Count, base = 5)^(lambda)-1)/(lambda))~ . + 
-                  (Temperature * Seasons) + (Humidity * Rain) + 
-                  (Solar.Radiation*Rush.Period) + 
-                + (Humidity * Wind.speed..m.s. * Rush.Period) + 
-                  I(Temperature^3) -Month,data=sample)
-summary(lm_trans2)
-vif_values <- ols_vif_tol(lm_trans2)
-vif_values$VIF
+lm_trans3 <- lm(((logb(Rented.Bike.Count, base = 5)^(lambda)-1)/(lambda))~ . + 
+(Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + (Solar.Radiation*Rush.Period) 
++ (Hour * Rush.Period * Seasons) + (Humidity * Wind.speed..m.s. * Visibility..10m.) 
++ I(Temperature^3) -Month,data=sample)
 
-#Removing Month reduced multicollinearity in the model and improved goodness of fit.
-#Removing the term with second highest multicollinearity, (Hour * Temperature * Solar.Radiation),
-#significantly improved VIF but reduced goodness of fit. I'll keep the three way interaction
-#And reduce variables based on AIC/BIC.
+vif_values <- ols_vif_tol(lm_trans3)
+vif_values[,c("Variables","VIF")]
 
+summary(lm_trans3)
+
+lm_trans4 <- lm(((log(Rented.Bike.Count, base = 5)^(lambda)-1)/(lambda))~ . + 
+(Temperature * Humidity) + (Solar.Radiation*Rush.Period) + 
+  (Humidity * Wind.speed..m.s. * Visibility..10m.) 
++ I(Temperature^3) -Seasons ,data=sample)
+
+vif_values <- ols_vif_tol(lm_trans4)
+vif_values[,c("Variables","VIF")]
+
+lm_trans5 <- lm(((log(Rented.Bike.Count)^(lambda)-1)/(lambda))~ . + 
+(Temperature * Humidity) + (Solar.Radiation * Rush.Period) + 
+(Humidity * Visibility..10m.) + I(Temperature^3) -Seasons -Wind.speed..m.s. ,data=sample)
+
+vif_values2 <- ols_vif_tol(lm_trans5)
+vif_values2[,c("Variables","VIF")]
+
+summary(lm_trans4)
+summary(lm_trans5)
 #-------------------------------------------------------------------------------
 
-lm_trans <- lm(((logb(Rented.Bike.Count, base = 5)^(lambda)-1)/(lambda))~ . + 
-                 (Temperature * Seasons) + (Humidity * Rain) + 
-                 (Solar.Radiation*Rush.Period) + 
-                 (Hour * Temperature * Solar.Radiation) 
-               + (Humidity * Wind.speed..m.s. * Rush.Period) + 
-                 I(Temperature^3) -Month,data=sample)
+#TODO: redo this section
+fit_back_bic = step(lm_trans5, direction = "backward", k=log(nrow(sample)), trace = 0)
+summary(fit_back_bic)
+fit_back_aic = step(lm_trans5, direction = "backward", trace = 0)
+summary(fit_back_aic)
 
-fit_back_bic = step(lm_trans, direction = "backward", k=log(n), trace = 0)
-fit_back_bic
-fit_back_aic = step(lm_trans, direction = "backward", trace = 0)
-fit_back_aic
-
-#BIC model has 15 predictors, AIC has 24, original model has 30
+#BIC model has 24 predictors, AIC has 30, original model has 31
 
 #Is there a statistically significant difference between full and reduced models?
 anova(fit_back_bic, fit_back_aic)
-anova(fit_back_aic, lm_trans)
+anova(fit_back_aic, lm_trans5)
 
 #AIC model performs better than BIC model, but full model does not perform significantly better than AIC model
-#Final model is AIC model
+
+#However both AIC and BIC models have a very large number of predictors
 
 #-------------------------------------------------------------------------------
 #Prediction
