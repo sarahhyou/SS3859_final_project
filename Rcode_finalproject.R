@@ -6,6 +6,7 @@ data$Month <- format(data$Date, "%m")
 #Extract Month from columns (per suggestions by the professor)
 #Drop date column as it's no longer useful anymore
 data <- data[ , !(names(data) %in% "Date")] 
+data$ID <- seq_along(data[,1])
 
 
 #stratified sampling to get same number of observations for each month
@@ -95,6 +96,8 @@ ggplot(sample, aes(x=Snow, y=Rented.Bike.Count)) +  geom_boxplot()
 #significant difference in rental rates depending on if it's raining/snowing that
 #day
 
+#drop ID
+sample<- data.frame((sample[ , !(names(sample) %in% c("ID"))]))
 #------------------------------------------------------------------------------
 
 #Interactions:
@@ -149,7 +152,7 @@ sample <- data.frame(sample %>%  filter(Rented.Bike.Count != 0))
 #BIKES ARE ONLY RENTED ON WEEKDAYS PERIOD???
 sample <- sample[ , !(names(sample) %in% c("Functioning.Day"))]
 
-lm5 <- lm(logb(Rented.Bike.Count, base = 5) ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
+lm5 <- lm(log(Rented.Bike.Count) ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
             (Solar.Radiation*Rush.Period) + (Hour * Rush.Period * Seasons) + 
             (Humidity * Wind.speed..m.s. * Visibility..10m.) + I(Temperature^3), 
           data = sample) 
@@ -162,7 +165,7 @@ check_model_assumption_graphs(lm5)
 library(MASS)
 par(mfrow=c(1,1))
 
-boxcox_result <- boxcox(logb(Rented.Bike.Count, base = 5) ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
+boxcox_result <- boxcox(log(Rented.Bike.Count) ~ . + (Temperature * Humidity) + (Wind.speed..m.s. * Seasons) + 
 (Solar.Radiation*Rush.Period) + (Hour * Rush.Period * Seasons) + 
   (Humidity * Wind.speed..m.s. * Visibility..10m.) + I(Temperature^3), 
        data = sample, lambda = seq(0, 5, by = 0.05))
@@ -254,10 +257,57 @@ summary(fit_back_aic)
 anova(fit_back_bic, fit_back_aic)
 anova(fit_back_aic, lm_trans5)
 
-#AIC model performs better than BIC model, but full model does not perform significantly better than AIC model
-
-#However both AIC and BIC models have a very large number of predictors
+#AIC model performs significantly better than BIC model, 
+#but full model does not perform significantly better than AIC model
+#AIC is final model
 
 #-------------------------------------------------------------------------------
 #Prediction
 
+#filter for observations in original data set that was not used for modelling
+test_set <- anti_join(data, df, by = "ID")
+#Drop Dew Point Temperature and Functioning Day
+test_set <- test_set[ , !(names(test_set) %in% c("Dew.point.temperature"))] 
+test_set <- test_set[ , !(names(test_set) %in% c("Functioning.Day"))]
+#Add Rush Period, Raining, Snowing
+test_set$Rush.Period <- ifelse((test_set$Hour > 16), "rush", "not rush")
+test_set$Rain <- ifelse((test_set$Rainfall.mm. > 0), "raining", "no rain")
+test_set$Snow <- ifelse((test_set$Snowfall..cm. > 0), "snowing", "no snow")
+
+#sample 500 observations 
+test <- data.frame(test_set %>% sample_n(size=500))
+
+#drop ID from actual testing set
+test<- data.frame((test[ , !(names(test) %in% c("ID"))]))
+
+#Get predicted values
+res_y1 <- test$Rented.Bike.Count - predict(fit_back_aic, newdata = subset(test, select = -c(1)))
+#RMSE
+sqrt(sum(res_y1^2)/nrow(test))
+
+#test with previously created models
+#log-boxcox nested model before applying AIC/BIC
+res_y2 <- test$Rented.Bike.Count - predict(lm_trans5, newdata = subset(test, select = -c(1)))
+sqrt(sum(res_y2^2)/nrow(test))
+
+#before multicollinearity reduction
+res_y3 <- test$Rented.Bike.Count - predict(lm_trans, newdata = subset(test, select = -c(1)))
+sqrt(sum(res_y3^2)/nrow(test))
+
+#before boxcox
+res_y4 <- test$Rented.Bike.Count - predict(lm5, newdata = subset(test, select = -c(1)))
+sqrt(sum(res_y4^2)/nrow(test))
+
+#before log transformation
+res_y5 <- test$Rented.Bike.Count - predict(lm3, newdata = subset(test, select = -c(1)))
+sqrt(sum(res_y5^2)/nrow(test))
+
+#base model
+base <- lm(Rented.Bike.Count ~., data = sample)
+res_y6 <- test$Rented.Bike.Count - predict(base, newdata = subset(test, select = -c(1)))
+sqrt(sum(res_y6^2)/nrow(test))
+
+#Final chosen model performs better on predictions than all Y-transformed models
+#But performs worse with models without Y-transformation
+#output all significant coefficients of final model
+summary(fit_back_aic)$coefficients[, "Pr(>|t|)"][summary(fit_back_aic)$coefficients[, "Pr(>|t|)"] < 0.05]
